@@ -1,0 +1,1010 @@
+---
+title: "Code Ownership in Github Action Workflow files"
+output:
+  html_document:
+    df_print: paged
+---
+
+# GA Code Ownership Analysis
+
+```{r message=FALSE}
+library(dplyr) 
+library(tidyr)
+library(stringr)
+library(readr) # read csv
+library(ggpubr) # combine multiple graphs into one
+library(ggplot2)
+library(lubridate)
+library(Polychrome) # color palette
+library(knitr)
+library(kableExtra)
+library(gridExtra)
+```
+
+```{r}
+# set working directory
+setwd(setwd("~/Documents/GitHub/code-ownership-analysis"))
+```
+
+## Import data
+
+```{r message=FALSE, warning=FALSE}
+tensorflow <- read_csv("./data/tensorflow_commit_history.csv")
+keras <- read_csv("./data/keras_commit_history.csv")
+pytorch <- read_csv("./data/pytorch_commit_history.csv")
+vscode <- read_csv("./data/vscode_commit_history.csv")
+powertoys <- read_csv("./data/PowerToys_commit_history.csv")
+react <- read_csv("./data/react_commit_history.csv")
+reactNative <- read_csv("./data/react-native_commit_history.csv")
+createReactApp <- read_csv("./data/create-react-app_commit_history.csv")
+core <- read_csv("./data/core_commit_history.csv")
+flutter <- read_csv("./data/flutter_commit_history.csv")
+azureDocs <- read_csv("./data/azure-docs_commit_history.csv")
+stableDiffusionWebUI <- read_csv("./data/stable-diffusion-webui_commit_history.csv")
+nextJs <- read_csv("./data/next.js_commit_history.csv")
+langchain <- read_csv("./data/langchain_commit_history.csv")
+```
+
+### Check for missing data
+
+When reading the commit data from these files, R will throw warning messages because of missing values. The following code chunk inspects what values are missing.
+
+```{r include=FALSE}
+# 1 NA in date
+reactNative %>% summarise(across(everything(), ~ sum(is.na(.)))) 
+# 2 NA in date
+createReactApp %>% summarise(across(everything(), ~ sum(is.na(.)))) 
+# 7 NA in date + 6 in message
+core %>% summarise(across(everything(), ~ sum(is.na(.)))) 
+# 14 NA in date + 2 in message
+flutter %>% summarise(across(everything(), ~ sum(is.na(.)))) 
+# 4 NA in date + 31 message
+azureDocs %>% summarise(across(everything(), ~ sum(is.na(.)))) 
+# 7 NA in date + 20 in message
+nextJs %>% summarise(across(everything(), ~ sum(is.na(.))))
+# 20 NA in date
+langchain %>% summarise(across(everything(), ~ sum(is.na(.)))) 
+```
+
+## Data preprocessing
+
+### Combine data in a single data frame
+
+Combine the data of all repositories into a single data frame. Here I also create a new column called `repo` to indicate from which repository the data is from.
+
+```{r}
+all_repos <- bind_rows(
+  tensorflow %>% mutate(repo='tensorflow'), 
+  keras %>% mutate(repo='keras'), 
+  pytorch %>% mutate(repo='pytorch'),
+  vscode %>% mutate(repo='vscode'),
+  powertoys %>% mutate(repo='powertoys'),
+  react %>% mutate(repo='react'),
+  reactNative %>% mutate(repo='reactNative'),
+  createReactApp %>% mutate(repo='createReactApp'),
+  core %>% mutate(repo='core'),
+  flutter %>% mutate(repo='flutter'),
+  azureDocs %>% mutate(repo='azureDocs'),
+  stableDiffusionWebUI %>% mutate(repo='stableDiffusionWebUI'),
+  nextJs %>% mutate(repo='nextJs'),
+  langchain %>% mutate(repo='langchain'))
+```
+
+### Extract yaml files
+
+Extract yaml commits inside the `.github/workflows` directory. The input data frame needs to be structured so that each row represents a yaml file from a commit. If a commit features multiple yaml files, it is split into multiple rows.
+
+```{r}
+# helper function
+extract_yaml_files <- function(commits_df){
+  yamlFiles <- commits_df %>%
+    filter(
+      str_starts(file, ".github/workflows/") &
+      str_ends(file, ".yml")) %>%
+    mutate(file = gsub(".github/workflows/","",file)) %>% # remove path from file name
+    mutate(file = gsub(".yml|.yaml","",file)) # remove file ending to shorten the names
+  
+  return(yamlFiles)
+}
+```
+
+```{r}
+# TensorFlow
+tensorflow_yml_commits <- extract_yaml_files(tensorflow) 
+# Keras
+keras_yml_commits <- extract_yaml_files(keras) 
+# Pytorch
+pytorch_yml_commits <- extract_yaml_files(pytorch) 
+# VScode
+vscode_yml_commits <- extract_yaml_files(vscode)
+# PowerToys
+powertoys_yml_commits <- extract_yaml_files(powertoys)
+# React
+react_yml_commits <- extract_yaml_files(react)
+# React-Native
+reactNative_yml_commits <- extract_yaml_files(reactNative)
+# Create-React-App
+createReactApp_yml_commits <- extract_yaml_files(createReactApp)
+# Core
+core_yml_commits <- extract_yaml_files(core)
+# Flutter
+flutter_yml_commits <- extract_yaml_files(flutter)
+# Azure-Docs
+azureDocs_yml_commits <- extract_yaml_files(azureDocs)
+# stableDiffusionWebUI
+stableDiffusionWebUI_yml_commits <- extract_yaml_files(stableDiffusionWebUI)
+# nextJs
+nextJs_yml_commits <- extract_yaml_files(nextJs)
+# React
+langchain_yml_commits <- extract_yaml_files(langchain)
+```
+
+Combine all yml files into a single data frame
+
+```{r}
+all_yml_files <- bind_rows(
+  tensorflow_yml_commits %>% mutate(repo='tensorflow'),
+  keras_yml_commits %>% mutate(repo='keras'),
+  pytorch_yml_commits %>% mutate(repo='pytorch'),
+  vscode_yml_commits %>% mutate(repo='vscode'),
+  powertoys_yml_commits %>% mutate(repo='powertoys'),
+  react_yml_commits %>% mutate(repo='react'),
+  reactNative_yml_commits %>% mutate(repo='reactNative'),
+  createReactApp_yml_commits %>% mutate(repo='createReactApp'),
+  core_yml_commits %>% mutate(repo='core'),
+  flutter_yml_commits %>% mutate(repo='flutter'),
+  azureDocs_yml_commits %>% mutate(repo='azureDocs'),
+  stableDiffusionWebUI_yml_commits %>% mutate(repo='stableDiffusionWebUI'),
+  nextJs_yml_commits %>% mutate(repo='nextJs'),
+  langchain_yml_commits %>% mutate(repo='langchain'),
+  )
+```
+
+## Functions for creating the plots
+
+### Commit contribution by file
+
+This plot shows the number of authors and commits per file.
+
+```{r}
+plot_commit_contribution <- function(df, repoName) {
+  # get number of unique values
+  ymlFilesCount <- n_distinct(df$file)
+  ymlAuthorCount <- n_distinct(df$author)
+  # set thresholds
+  thresholdFiles <- 10
+  thresholdAuthors <- 20
+  
+  # Filter df to include top 'thresholdFiles' files with most commits, or all if fewer exist
+  top_files <- df %>%
+      # count occurrences of each file
+      count(file, name = "count") %>%
+      # sort files by their number of commits
+      arrange(desc(count)) %>%
+      # use slice_head to get exactly the number of files even if there are ties
+      # if number of files exceeds threshold, use threshold as max number of files to plot
+      slice_head(n = min(ymlFilesCount, thresholdFiles))
+  
+  plot_data <- df %>%
+    filter(file %in% top_files$file)
+  
+  plot <- plot_data %>%
+    group_by(file, author) %>%
+    summarise(count = n()) %>% 
+    ggplot(., aes(fill = author, x = reorder(file, count, sum), y = count, label = count)) +  
+    geom_bar(position ="stack", stat = "identity") + 
+    geom_text(size = 3, position = position_stack(vjust = 0.5)) + 
+    labs(
+      x = "Yaml Files", 
+      y = "Number of Commits", 
+      title = paste("Commit Contribution for YAML Files in", repoName),
+      # show different text based on number of files in df
+      caption = ifelse(ymlFilesCount > thresholdFiles,
+        paste("Among ", ymlFilesCount ,"total YAML files, this graph only includes", thresholdFiles , 
+              "files with the most commits."),
+        paste("Total of", ymlFilesCount ," YAML files from",ymlAuthorCount,"unique authors."))
+      )+
+    theme_bw() + 
+    theme(axis.text.x = element_text(angle = 20, vjust = 1, hjust=1), 
+      plot.caption = element_text(hjust=0),
+      # display or hide legend based on number of authors
+      legend.position = ifelse(
+        ymlAuthorCount > thresholdAuthors,
+        "none",
+        "bottom")
+    )
+  
+  return(plot)
+}
+# test function with react repo
+#plot_commit_contribution(react_yml_commits, "React")
+```
+
+### Compare commit contributions of authors
+
+This plot shows the number of commits per author with the color indicating the different files he/she added changes to.
+
+```{r}
+plot_author_comparison <- function(df, repoName) {
+  # get number of unique values
+  ymlFilesCount <- n_distinct(df$file)
+  ymlAuthorCount <- n_distinct(df$author)
+  # set thresholds
+  thresholdFiles <- 20
+  thresholdAuthors <- 15
+  
+  # Filter df to include top 'thresholdFiles' author with most commits, or all if fewer exist
+  top_files <- df %>%
+      # count occurrences of each author
+      count(author, name = "count") %>%
+      # sort author by their number of commits
+      arrange(desc(count)) %>%
+      # use slice_head to get exactly the number of files even if there are ties
+      # if number of files exceeds threshold, use threshold as max number of files to plot
+      slice_head(n = min(ymlFilesCount, thresholdFiles))
+  
+  plot_data <- df %>%
+    filter(author %in% top_files$author)
+  
+  plot <- plot_data %>%
+    group_by(file, author) %>%
+    summarise(count = n()) %>% 
+    ggplot(., aes(fill = file, x = reorder(author, count, sum), y = count, label = count)) +  
+    geom_bar(position ="stack", stat = "identity") + 
+    geom_text(size = 3, position = position_stack(vjust = 0.5)) + 
+    labs(
+      x = "Authors", 
+      y = "Number of Commits", 
+      title = paste("Compare commit contribution by authors in", repoName),
+      # show different text based on number of files in df
+      caption = ifelse(ymlFilesCount > thresholdFiles,
+        paste("Among", ymlAuthorCount ,"authors, this graph only includes the", thresholdFiles , 
+              "authors with the most commits."),
+        paste("Total of", ymlAuthorCount ," Authors who worked on YAML files."))
+      ) +
+    coord_flip()+
+    theme_bw() + 
+    theme(plot.caption = element_text(hjust=0),
+      # display or hide legend based on number of authors
+      legend.position = ifelse(
+        ymlAuthorCount > thresholdAuthors,
+        "none",
+        "bottom")
+    )
+  
+  return(plot)
+}
+# test function with react repo
+#plot_author_comparison(react_yml_commits, "React")
+```
+
+### Commit activity as a timeline
+
+This plot shows the number of commits over the time from the first (yaml file) commit in the workflow directory up to the date where the data was fetched.
+
+```{r}
+plot_commit_timeline <- function(df, repoName) {
+  # get number of unique values
+  yearFirstCommit <- min(year(df$date))
+  dateFirstCommit <- format(min(as.Date(df$date)), "%B %d, %Y")
+  yearLastCommit <- max(year(df$date))
+  dateLastCommit <- format(max(as.Date(df$date)), "%B %d, %Y")
+  
+  totalCommits <- n_distinct(df$hash)
+  
+  # Calculate max commits on single day
+  maxDailyCommit <- df %>%
+  count(date = as.Date(date)) %>% # by using as.Date we remove the time from the date
+  pull(n) %>%
+  max()
+  # Calculate number of ticks on y-axis
+  maxTicks <- 10
+  tickInterval <- ceiling(maxDailyCommit / maxTicks) # round the result to the next bigger int: 2.7 -> 3
+  
+  plot <- df %>%
+    group_by(date) %>%
+    summarise(count = n()) %>%
+    ggplot(aes(x = as.Date(date), y = count)) + 
+    geom_col(color = "#00AFBB", fill="#00AFBB") +
+    scale_y_continuous(breaks = seq(0, maxDailyCommit, by = tickInterval), limits = c(0, maxDailyCommit)) +
+    labs( 
+      x = "Date", 
+      y = "Number of Commits", 
+      title = paste0("YAML File Commit Activity Over Time in the ",repoName ," Repository (",yearFirstCommit,"-",yearLastCommit,")"),
+      caption = paste0("The data represents a total of ",totalCommits, " commits recorded from ",
+                      dateFirstCommit, " to ",dateLastCommit,". \nNote: Individual bars represent the total commits per day; gaps indicate days with no recorded activity." )) + 
+    theme_bw() + 
+    theme(plot.caption = element_text(hjust=0)) 
+  
+  return(plot)
+}
+# test function with react repo
+#plot_commit_timeline(react_yml_commits, "React")
+```
+
+### Ownership map
+
+This plot shows an ownership map where you can see who committed when to a file and who was the owner of it at what point in time.
+
+```{r}
+plot_ownership_map <- function(df, repoName) {
+  # Create variables to display in plot text
+  yearFirstCommit <- min(year(df$date))
+  yearLastCommit <- max(year(df$date))
+  ymlFilesCount <- n_distinct(df$file)
+  ymlAuthorCount <- n_distinct(df$author) # do I need this?
+  # set thresholds
+  thresholdFiles <- 40
+  
+  # Filter df to include top 'thresholdFiles' files with most commits, or all if fewer exist
+  top_files <- df %>%
+      # count occurrences of each file
+      count(file, name = "count") %>%
+      # sort files by their number of commits
+      arrange(desc(count)) %>%
+      # use slice_head to get exactly the number of files even if there are ties
+      # if number of files exceeds threshold, use threshold as max number of files to plot
+      slice_head(n = min(ymlFilesCount, thresholdFiles))
+  
+  
+  # Count the number of commits for each author and file up to each point in time
+  commits_cumulative <- df %>%
+    filter(file %in% top_files$file) %>% # filter files to reduce number of files in plot
+    group_by(file, author) %>%
+    arrange(date, .by_group = TRUE) %>%
+    mutate(commit_count = row_number()) %>%
+    ungroup()
+  
+  # Initialize the new data frame
+  result_df <- data.frame(file = character(), 
+                          date = as.Date(character()), 
+                          author = character(), 
+                          leadingAuthor = character(), 
+                          stringsAsFactors = FALSE)
+  
+  # Loop through each row to determine the leading author
+  for(i in 1:nrow(commits_cumulative)) {
+    current_file <- commits_cumulative$file[i]
+    current_date <- commits_cumulative$date[i]
+    
+    # Subset the original data frame for the current file and dates up to the current date
+    subset_df <- commits_cumulative[commits_cumulative$file == current_file & 
+                                      commits_cumulative$date <= current_date, ]
+    
+    # Determine the leading author (the one with the most commits, and in case of a tie, the most recent)
+    leading_author <- subset_df %>%
+      group_by(author) %>%
+      summarise(commit_count = n(), latest_commit = max(date)) %>%
+      arrange(desc(commit_count), desc(latest_commit)) %>%
+      slice(1) %>%
+      pull(author)
+    
+    # Append to the result data frame
+    result_df <- rbind(result_df, 
+                       data.frame(file = current_file, date = current_date, 
+                                  author = commits_cumulative$author[i], 
+                                  leadingAuthor = leading_author))
+  }
+  
+  # Assign unique colors to each author using a custom color palette
+  num_authors <- unique(result_df$author)
+  seedcolors <- c(
+    "#E63946", "#F4A261", "#2A9D8F", "#D90429", "#E76F51", 
+    "#2A6F97", "#F77F00", "#80B918", "#9A031E", "#D62828", 
+    "#023E7D", "#5F0F40", "#9E0059", "#F8961E", "#3A0CA3",
+    "#E9C46A", "#8D99AE", "#006D77", "#EF476F", "#F72585")
+  colors <- createPalette(length(num_authors), seedcolors = seedcolors)
+  names(colors) <- num_authors
+  
+  plot <- result_df %>%
+    ggplot(aes(x = date, y = file, group = file)) +
+    # Add lines that change color based on the leading author
+    geom_line(aes(color = leadingAuthor), linewidth = 1, alpha = 1) +
+    # Add points for each commit
+    geom_point(aes(color = author), size = 3, alpha = 0.6) +
+    # Set the colors for the authors
+    scale_color_manual(values = colors) +
+    # Adjust y-axis to show truncated file names
+    scale_y_discrete(labels = function(x) sapply(x, function(y) {
+      # shorten all file names longer than 10 characters
+      ifelse(nchar(y) > 10, paste0(substr(y, 1, 10), "..."), y)
+    })) +
+    labs( 
+      x = "Date", 
+      y = "Files", 
+      color = "Authors",
+      title = paste0("Ownership Map of YAML Files from ",repoName ," Repository (",yearFirstCommit,"-",yearLastCommit,")"), 
+      caption = ifelse(ymlFilesCount > thresholdFiles,
+        paste0("From a total of ", ymlFilesCount ," YAML files, this graph only includes ", thresholdFiles , 
+              " files with the most commits. \n  Line colors denote the current leading contributor (owner) for each file."),
+        paste0("Total of ", ymlFilesCount, " YAML files. Line colors denote the current leading contributor (owner) for each file."))) + 
+    theme_bw() + 
+    theme(
+      legend.position = "none", # hide the legend for spacing reasons
+      #legend.box.just = "left",
+      # Remove top margin of legend
+      #legend.margin = margin(t = 0, unit = "cm"), 
+      # Shift legend box to the left
+      #legend.box.margin = margin(l = -3, unit = "cm"), 
+      # Shift caption to the left
+      plot.caption = element_text(hjust = -0.1, vjust = 1))# +  
+    #guides(color=guide_legend(ncol=7))
+  
+  return(plot)
+}
+# test function with react repo
+#plot_ownership_map(react_yml_commits, "React")
+```
+
+### Ownership evolution of single file
+
+Create similar plot as the ownership map but only for a single file and display additions and deletions for each commit. This function takes a df from the hole repo together with its name, as well as the name of the file of interest as input.
+
+```{r}
+plot_file_evolution <- function(df, repoName, fileName) {
+  # Filter df for specific file
+  filtered_df <- df %>% filter(file==fileName)
+  
+  # get number of unique values
+  ymlFilesCount <- n_distinct(filtered_df$file)
+  ymlAuthorCount <- n_distinct(filtered_df$author)
+  commitCount <- nrow(filtered_df)
+  
+  # set thresholds
+  thresholdCommits <- 40
+  
+  # Assign unique colors to each author
+  author_colors <- setNames(rainbow(length(unique(filtered_df$author))), unique(filtered_df$author))
+  
+  plot_data <- filtered_df %>%
+    mutate(net_change = as.numeric(additions) - as.numeric(deletions)) %>%
+    arrange(date, hash) %>%
+    mutate(commit_order = row_number())
+  
+  plot <- plot_data %>%
+    ggplot(aes(x = commit_order, 
+               y = net_change, 
+               fill = ifelse(net_change > 0, 'Positive', 'Negative'))) +
+    geom_bar(position ="stack", stat = "identity", width = 1) + 
+    scale_fill_manual(values = c("Positive" = "darkgreen", "Negative" = "darkred")) +
+    scale_x_continuous(name = "Commit Sequence", breaks = NULL) + # remove x-axis breaks
+    scale_y_continuous(name = "Lines Changed", 
+                       breaks = scales::pretty_breaks(n = 10), 
+                       labels = scales::comma) +
+    geom_bar(aes(color=factor(author)), position="stack", stat="identity", show.legend = FALSE) + # Add border color
+    scale_color_manual(values = author_colors) +
+    geom_hline(yintercept = 0) + # Add zero line
+    labs(
+      title = paste0("Commit Contributions for file \"", fileName,"\" in ", repoName),
+      # show different text based on number of files in df
+      caption = paste("Total of", commitCount ," commits from",ymlAuthorCount,"unique authors.")) +
+    theme_bw() + 
+    theme(axis.ticks.x = element_blank(), 
+      plot.caption = element_text(hjust=0),
+      legend.position = "none")
+  
+  return(plot)
+}
+# test function with react repo
+#plot_file_evolution(react_yml_commits, "React", "commit_artifacts")
+```
+
+# Repository Analysis
+
+## Overview
+
+```{r}
+# Summarize all repository data
+repo_summary <- all_repos %>%
+  # remove commits without commit date
+  filter(!is.na(date)) %>%
+  group_by(repo) %>%
+  summarize(
+    "commits" = n_distinct(hash),
+    "authors" = n_distinct(author),
+    "first commit" = min(as.Date(date)),
+    "last commit" = max(as.Date(date))
+  )
+
+# Summarize YAML specific data
+yaml_summary <- all_yml_files %>%
+  # remove commits without commit date
+  filter(!is.na(date)) %>%
+  group_by(repo) %>%
+  summarize(
+    yml_commits = n(),
+    yml_authors = n_distinct(author),
+    "first yml commit" = min(as.Date(date))
+  )
+
+# Combine summaries
+final_table <- left_join(repo_summary, yaml_summary, by = "repo") %>%
+  select(repo, "commits", "authors", yml_commits, yml_authors, "first commit", "last commit", "first yml commit") %>%
+  arrange(desc(commits))
+
+# Add a row for total sums
+totals <- final_table %>%
+  summarize(
+    repo = "Total",
+    "commits" = sum(commits, na.rm = TRUE) %>% format(big.mark = "'", scientific = FALSE),
+    "authors" = sum(authors, na.rm = TRUE) %>% format(big.mark = "'", scientific = FALSE),
+    yml_commits = sum(yml_commits, na.rm = TRUE) %>% format(big.mark = "'", scientific = FALSE),
+    # get total unique authors not total authors
+    yml_authors = sum(yml_authors, na.rm = TRUE) %>% format(big.mark = "'", scientific = FALSE),
+    "first commit" = "",
+    "last commit" = "",
+    "first yml commit" = ""
+  )
+
+# Append totals row to the final table
+final_table_with_totals <- rbind(final_table, totals)
+
+# Create the table
+kable(final_table_with_totals, align = "c",caption = "Repository Summary")
+```
+
+### Authors who worked on multiple repos
+
+This table shows 3645 authors who worked on more than one of the repositories that I collected the data from. These people (and bots) committed changes to yml files in the workflow directory of multiple repositories.
+
+```{r message=FALSE}
+authors_with_multiple_repos <- all_repos %>%
+  group_by(author) %>%
+  summarise(numRepos = n_distinct(repo)) %>%
+  filter(numRepos >1) %>%
+  left_join(all_repos, by = "author") %>%
+  group_by(author, numRepos) %>%
+  summarise(repositories = paste(unique(repo), collapse = ", ")) %>%
+  arrange(desc(numRepos))
+
+# Create the table showing the top 20 auhtors who worked on the most repositories
+kable(head(authors_with_multiple_repos,20), align = "c",caption = "Repository Summary")
+
+```
+
+## TensorFlow
+
+### Commit contribution by file and author
+
+```{r}
+plot_commit_contribution(tensorflow_yml_commits, "TensorFlow")
+```
+
+### Compare contribution by author
+
+```{r}
+plot_author_comparison(tensorflow_yml_commits, "TensorFlow")
+```
+
+### Commit activity over time
+
+```{r}
+plot_commit_timeline(tensorflow_yml_commits, "TensorFlow")
+```
+
+### Ownership Map
+
+```{r}
+plot_ownership_map(tensorflow_yml_commits, "TensorFlow")
+```
+
+### Ownership evolution of single file
+
+```{r}
+plot_file_evolution(tensorflow_yml_commits, "TensorFlow", "arm-ci")
+```
+
+## Keras
+
+### Commit contribution by file and author
+
+```{r}
+plot_commit_contribution(keras_yml_commits, "Keras")
+```
+### Compare contribution by author
+
+```{r}
+plot_author_comparison(keras_yml_commits, "Keras")
+```
+
+### Commit activity over time
+
+```{r}
+plot_commit_timeline(keras_yml_commits, "Keras")
+```
+
+### Ownership Map
+
+```{r}
+plot_ownership_map(keras_yml_commits, "Keras")
+```
+
+### Ownership evolution of single file
+
+```{r}
+plot_file_evolution(keras_yml_commits, "Keras", "actions")
+```
+
+## Pytorch
+
+### Commit contribution by file and author
+
+```{r}
+plot_commit_contribution(pytorch_yml_commits, "Pytorch")
+```
+
+### Compare contribution by author
+
+```{r}
+plot_author_comparison(pytorch_yml_commits, "Pytorch")
+```
+
+### Commit activity over time
+
+```{r}
+plot_commit_timeline(pytorch_yml_commits, "Pytorch")
+```
+
+### Ownership Map
+
+```{r}
+plot_ownership_map(pytorch_yml_commits, "Pytorch")
+```
+
+### Ownership evolution of single file
+
+```{r}
+plot_file_evolution(pytorch_yml_commits, "Pytorch", "_win-test")
+```
+
+## VScode
+
+### Commit contribution by file and author
+
+```{r}
+plot_commit_contribution(vscode_yml_commits, "VS Code")
+```
+
+### Compare contribution by author
+
+```{r}
+plot_author_comparison(vscode_yml_commits, "VS Code")
+```
+
+### Commit activity over time
+
+```{r}
+plot_commit_timeline(vscode_yml_commits, "VS Code")
+```
+
+### Ownership Map
+
+```{r}
+plot_ownership_map(vscode_yml_commits, "VS Code")
+```
+
+### Ownership evolution of single file
+
+```{r}
+plot_file_evolution(vscode_yml_commits, "VS Code", "ci")
+```
+
+## PowerToys
+
+### Commit contribution by file and author
+
+```{r}
+plot_commit_contribution(powertoys_yml_commits, "Powertoys")
+```
+
+### Compare contribution by author
+
+```{r}
+plot_author_comparison(powertoys_yml_commits, "Powertoys")
+```
+
+### Commit activity over time
+
+```{r}
+plot_commit_timeline(powertoys_yml_commits, "Powertoys")
+```
+
+### Ownership Map
+
+```{r}
+plot_ownership_map(powertoys_yml_commits, "Powertoys")
+```
+
+### Ownership evolution of single file
+
+```{r}
+plot_file_evolution(powertoys_yml_commits, "Powertoys", "package-submissions")
+```
+
+## React
+
+### Commit contribution by file and author
+
+```{r}
+plot_commit_contribution(react_yml_commits, "React")
+```
+
+### Compare contribution by author
+
+```{r}
+plot_author_comparison(react_yml_commits, "React")
+```
+
+### Commit activity over time
+
+```{r}
+plot_commit_timeline(react_yml_commits, "React")
+```
+
+### Ownership Map
+
+```{r}
+plot_ownership_map(react_yml_commits, "React")
+```
+
+### Ownership evolution of single file
+
+```{r}
+plot_file_evolution(react_yml_commits, "React", "devtools_check_repro")
+```
+
+## React-Native
+
+### Commit contribution by file and author
+
+```{r}
+plot_commit_contribution(reactNative_yml_commits, "React Native")
+```
+
+### Compare contribution by author
+
+```{r}
+plot_author_comparison(reactNative_yml_commits, "React Native")
+```
+
+### Commit activity over time
+
+```{r}
+plot_commit_timeline(reactNative_yml_commits, "React Native")
+```
+
+### Ownership Map
+
+```{r}
+plot_ownership_map(reactNative_yml_commits, "React Native")
+```
+
+### Ownership evolution of single file
+
+```{r}
+plot_file_evolution(reactNative_yml_commits, "React Native", "on-issue-labeled")
+```
+
+## Create-React-App
+
+### Commit contribution by file and author
+
+```{r}
+plot_commit_contribution(createReactApp_yml_commits, "Create-React-App")
+```
+
+### Compare contribution by author
+
+```{r}
+plot_author_comparison(createReactApp_yml_commits, "Create-React-App")
+```
+
+### Commit activity over time
+
+```{r}
+plot_commit_timeline(createReactApp_yml_commits, "Create-React-App")
+```
+
+### Ownership Map
+
+```{r}
+plot_ownership_map(createReactApp_yml_commits, "Create-React-App")
+```
+
+### Ownership evolution of single file
+
+```{r}
+plot_file_evolution(createReactApp_yml_commits, "Create-React-App", "build")
+```
+
+## Core
+
+### Commit contribution by file and author
+
+```{r}
+plot_commit_contribution(core_yml_commits, "Core")
+```
+
+### Compare contribution by author
+
+```{r}
+plot_author_comparison(core_yml_commits, "Core")
+```
+
+### Commit activity over time
+
+```{r}
+plot_commit_timeline(core_yml_commits, "Core")
+```
+
+### Ownership Map
+
+```{r}
+plot_ownership_map(core_yml_commits, "Core")
+```
+
+### Ownership evolution of single file
+
+```{r}
+plot_file_evolution(core_yml_commits, "Core", "builder")
+```
+
+## Flutter
+
+### Commit contribution by file and author
+
+```{r}
+plot_commit_contribution(flutter_yml_commits, "Flutter")
+```
+
+### Compare contribution by author
+
+```{r}
+plot_author_comparison(flutter_yml_commits, "Flutter")
+```
+
+### Commit activity over time
+
+```{r}
+plot_commit_timeline(flutter_yml_commits, "Flutter")
+```
+
+### Ownership Map
+
+```{r}
+plot_ownership_map(flutter_yml_commits, "Flutter")
+```
+
+### Ownership evolution of single file
+
+```{r}
+plot_file_evolution(flutter_yml_commits, "Flutter", "scorecards-analysis")
+```
+
+## Azure Docs
+
+### Commit contribution by file and author
+
+```{r}
+plot_commit_contribution(azureDocs_yml_commits, "Azure Docs")
+```
+
+### Compare contribution by author
+
+```{r}
+plot_author_comparison(azureDocs_yml_commits, "Azure Docs")
+```
+
+### Commit activity over time
+
+```{r}
+plot_commit_timeline(azureDocs_yml_commits, "Azure Docs")
+```
+
+### Ownership Map
+
+```{r}
+plot_ownership_map(azureDocs_yml_commits, "Azure Docs")
+```
+
+### Ownership evolution of single file
+
+```{r}
+plot_file_evolution(azureDocs_yml_commits, "Azure Docs", "stale")
+```
+
+## StableDiffusionWebUI
+
+### Commit contribution by file and author
+
+```{r}
+plot_commit_contribution(stableDiffusionWebUI_yml_commits, "StableDiffusionWebUI")
+```
+
+### Compare contribution by author
+
+```{r}
+plot_author_comparison(stableDiffusionWebUI_yml_commits, "StableDiffusionWebUI")
+```
+
+### Commit activity over time
+
+```{r}
+plot_commit_timeline(stableDiffusionWebUI_yml_commits, "StableDiffusionWebUI")
+```
+
+### Ownership Map
+
+```{r}
+plot_ownership_map(stableDiffusionWebUI_yml_commits, "StableDiffusionWebUI")
+```
+
+### Ownership evolution of single file
+
+```{r}
+plot_file_evolution(stableDiffusionWebUI_yml_commits, "StableDiffusionWebUI", "python-package-conda")
+```
+
+## Next.Js
+
+### Commit contribution by file and author
+
+```{r}
+plot_commit_contribution(nextJs_yml_commits, "Next.Js")
+```
+
+### Compare contribution by author
+
+```{r}
+plot_author_comparison(nextJs_yml_commits, "Next.Js")
+```
+
+### Commit activity over time
+
+```{r}
+plot_commit_timeline(nextJs_yml_commits, "Next.Js")
+```
+
+### Ownership Map
+
+```{r}
+plot_ownership_map(nextJs_yml_commits, "Next.Js")
+```
+
+### Ownership evolution of single file
+
+```{r}
+plot_file_evolution(nextJs_yml_commits, "Next.Js", "build_test_deploy")
+```
+
+## Langchain
+
+### Commit contribution by file and author
+
+```{r}
+plot_commit_contribution(langchain_yml_commits, "Langchain")
+```
+
+### Compare contribution by author
+
+```{r}
+plot_author_comparison(langchain_yml_commits, "Langchain")
+```
+
+### Commit activity over time
+
+```{r}
+plot_commit_timeline(langchain_yml_commits, "Langchain")
+```
+
+### Ownership Map
+
+```{r}
+plot_ownership_map(langchain_yml_commits, "Langchain")
+```
+
+### Ownership evolution of single file
+
+```{r}
+plot_file_evolution(langchain_yml_commits, "Langchain", "codespell")
+```
